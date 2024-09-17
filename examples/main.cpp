@@ -5,427 +5,336 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-#include "imgui-extra/imgui_impl.h"
+#include "httplib.h" // For the HTTP server
 
-#define SDL_DISABLE_ARM_NEON_H 1
-#include <SDL.h>
-#include <SDL_opengl.h>
 #include <cmath>
+#include <csignal>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
+#pragma warning(disable : 4244 4267) // possible loss of data
 #endif
 
-/**
- * Get the size of screen where the SDL window runs in.
- *
- * SDL_Window* window could be NULL, which means we get the screen size of the default 0-index display.
- * If window is not NULL, the we need to get the screen size of the display where the window runs in.
- *
- */
-static bool get_screen_size(SDL_DisplayMode &dm, SDL_Window* window) {
-    int displayIndex = 0;
-    if (window != NULL) {
-        displayIndex = SDL_GetWindowDisplayIndex(window);
-    }
-    if (displayIndex < 0) {
-        return false;
-    }
-    if (SDL_GetCurrentDisplayMode(displayIndex, &dm) != 0) {
-        return false;
-    }
+httplib::Server svr; // Declare server globally for access during shutdown
 
-    fprintf(stderr, "%s: screen size (%d x %d) \n", __func__, dm.w, dm.h);
-    return true;
+// Signal handler for graceful shutdown
+void signal_handler(int signum) {
+  printf("Interrupt signal (%d) received. Shutting down gracefully...\n",
+         signum);
+  svr.stop();
 }
 
-// downscale image with nearest-neighbor interpolation
-static sam_image_u8 downscale_img(sam_image_u8 &img , float scale) {
-    sam_image_u8 new_img;
-
-    int width = img.nx;
-    int height = img.ny;
-
-    int new_width = img.nx / scale + 0.5f;
-    int new_height = img.ny / scale + 0.5f;
-
-    new_img.nx = new_width;
-    new_img.ny = new_height;
-    new_img.data.resize(new_img.nx*new_img.ny*3);
-
-    fprintf(stderr, "%s: scale: %f\n", __func__, scale);
-    fprintf(stderr, "%s: resize image from (%d x %d) to (%d x %d)\n", __func__, img.nx, img.ny, new_img.nx, new_img.ny);
-
-    for (int y = 0; y < new_height; ++y) {
-        for (int x = 0; x < new_width; ++x) {
-            int src_x = (x + 0.5f) * scale - 0.5f;
-            int src_y = (y + 0.5f) * scale - 0.5f;
-
-            int src_index = (src_y * width + src_x) * 3;
-            int dest_index = (y * new_width + x) * 3;
-
-            for (int c = 0; c < 3; ++c) {
-                new_img.data[dest_index + c] = img.data[src_index + c];
-            }
-        }
-    }
-
-
-    return new_img;
+// Function to print usage information
+static void print_usage(int argc, char **argv, const sam_params &params) {
+  std::cerr << "usage: " << argv[0] << " [options]\n";
+  std::cerr << "\n";
+  std::cerr << "options:\n";
+  std::cerr << "  -h, --help            show this help message and exit\n";
+  std::cerr << "  -s SEED, --seed SEED  RNG seed (default: -1)\n";
+  std::cerr << "  -t N, --threads N     number of threads to use during "
+               "computation (default: "
+            << params.n_threads << ")\n";
+  std::cerr << "  -m FNAME, --model FNAME\n";
+  std::cerr << "                        model path (default: " << params.model
+            << ")\n";
+  std::cerr << "  -i FNAME, --inp FNAME\n";
+  std::cerr << "                        input file (default: "
+            << params.fname_inp << ")\n";
+  std::cerr << "  -o FNAME, --out FNAME\n";
+  std::cerr << "                        output file (default: "
+            << params.fname_out << ")\n";
+  std::cerr << "\n";
 }
 
-static bool downscale_img_to_screen(sam_image_u8 &img, SDL_Window* window) {
-    SDL_DisplayMode dm = {};
-    if (!get_screen_size(dm, window)) {
-        fprintf(stderr, "%s: failed to get screen size of the display.\n", __func__);
-        return false;
+// Function to parse command-line arguments and fill the params structure
+static bool params_parse(int argc, char **argv, sam_params &params) {
+  for (int i = 1; i < argc; i++) {
+    std::string arg = argv[i];
+
+    if (arg == "-s" || arg == "--seed") {
+      params.seed = std::stoi(argv[++i]);
+    } else if (arg == "-t" || arg == "--threads") {
+      params.n_threads = std::stoi(argv[++i]);
+    } else if (arg == "-m" || arg == "--model") {
+      params.model = argv[++i];
+    } else if (arg == "-i" || arg == "--inp") {
+      params.fname_inp = argv[++i];
+    } else if (arg == "-o" || arg == "--out") {
+      params.fname_out = argv[++i];
+    } else if (arg == "-h" || arg == "--help") {
+      print_usage(argc, argv, params);
+      exit(0);
+    } else {
+      std::cerr << "error: unknown argument: " << arg << "\n";
+      print_usage(argc, argv, params);
+      return false;
     }
-    fprintf(stderr, "%s: screen size (%d x %d) \n", __func__,dm.w,dm.h);
-    if (dm.h == 0 || dm.w == 0) {
-        // This means the window is running in other display.
-        return false;
-    }
+  }
 
-    // Add 5% margin between screen and window
-    const float margin = 0.05f;
-    const int max_width  = dm.w - margin * dm.w;
-    const int max_height = dm.h - margin * dm.h;
-
-    fprintf(stderr, "%s: img size (%d x %d) \n", __func__,img.nx,img.ny);
-
-    if (img.ny > max_height || img.nx > max_width) {
-        fprintf(stderr, "%s: img size (%d x %d) exceeds maximum allowed size (%d x %d) \n", __func__,img.nx,img.ny,max_width,max_height);
-        const float scale_y = (float)img.ny / max_height;
-        const float scale_x = (float)img.nx / max_width;
-        const float scale = std::max(scale_x, scale_y);
-
-        img = downscale_img(img, scale);
-    }
-
-    return true;
+  return true;
 }
 
-static bool load_image_from_file(const std::string & fname, sam_image_u8 & img) {
-    int nx, ny, nc;
-    auto data = stbi_load(fname.c_str(), &nx, &ny, &nc, 3);
-    if (!data) {
-        fprintf(stderr, "%s: failed to load '%s'\n", __func__, fname.c_str());
-        return false;
-    }
-    if (nc != 3) {
-        fprintf(stderr, "%s: '%s' has %d channels (expected 3)\n", __func__, fname.c_str(), nc);
-        return false;
-    }
-
-    img.nx = nx;
-    img.ny = ny;
-    img.data.resize(nx * ny * 3);
-    memcpy(img.data.data(), data, nx * ny * 3);
-
-    stbi_image_free(data);
-
-    return true;
+// Helper function to decode image data from Base64
+std::vector<unsigned char> base64_decode(const std::string &encoded) {
+  std::string cmd = "echo " + encoded + " | base64 --decode > decoded_img.jpg";
+  system(cmd.c_str());
+  std::ifstream file("decoded_img.jpg", std::ios::binary);
+  std::vector<unsigned char> buffer(std::istreambuf_iterator<char>(file), {});
+  file.close();
+  return buffer;
 }
 
-static void print_usage(int argc, char ** argv, const sam_params & params) {
-    fprintf(stderr, "usage: %s [options]\n", argv[0]);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h, --help            show this help message and exit\n");
-    fprintf(stderr, "  -s SEED, --seed SEED  RNG seed (default: -1)\n");
-    fprintf(stderr, "  -t N, --threads N     number of threads to use during computation (default: %d)\n", params.n_threads);
-    fprintf(stderr, "  -m FNAME, --model FNAME\n");
-    fprintf(stderr, "                        model path (default: %s)\n", params.model.c_str());
-    fprintf(stderr, "  -i FNAME, --inp FNAME\n");
-    fprintf(stderr, "                        input file (default: %s)\n", params.fname_inp.c_str());
-    fprintf(stderr, "  -o FNAME, --out FNAME\n");
-    fprintf(stderr, "                        output file (default: %s)\n", params.fname_out.c_str());
-    fprintf(stderr, "\n");
+// Downscale image with nearest-neighbor interpolation
+static sam_image_u8 downscale_img(sam_image_u8 &img, float scale) {
+  sam_image_u8 new_img;
+
+  int width = img.nx;
+  int height = img.ny;
+
+  int new_width = img.nx / scale + 0.5f;
+  int new_height = img.ny / scale + 0.5f;
+
+  new_img.nx = new_width;
+  new_img.ny = new_height;
+  new_img.data.resize(new_img.nx * new_img.ny * 3);
+
+  for (int y = 0; y < new_height; ++y) {
+    for (int x = 0; x < new_width; ++x) {
+      int src_x = (x + 0.5f) * scale - 0.5f;
+      int src_y = (y + 0.5f) * scale - 0.5f;
+
+      int src_index = (src_y * width + src_x) * 3;
+      int dest_index = (y * new_width + x) * 3;
+
+      for (int c = 0; c < 3; ++c) {
+        new_img.data[dest_index + c] = img.data[src_index + c];
+      }
+    }
+  }
+
+  return new_img;
 }
 
-static bool params_parse(int argc, char ** argv, sam_params & params) {
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+// Load image from binary data
+static bool load_image_from_memory(const std::vector<unsigned char> &data,
+                                   sam_image_u8 &img) {
+  int nx, ny, nc;
+  auto data_ptr =
+      stbi_load_from_memory(data.data(), data.size(), &nx, &ny, &nc, 3);
+  if (!data_ptr) {
+    fprintf(stderr, "Failed to load image from memory\n");
+    return false;
+  }
 
-        if (arg == "-s" || arg == "--seed") {
-            params.seed = std::stoi(argv[++i]);
-        } else if (arg == "-t" || arg == "--threads") {
-            params.n_threads = std::stoi(argv[++i]);
-        } else if (arg == "-m" || arg == "--model") {
-            params.model = argv[++i];
-        } else if (arg == "-i" || arg == "--inp") {
-            params.fname_inp = argv[++i];
-        } else if (arg == "-o" || arg == "--out") {
-            params.fname_out = argv[++i];
-        } else if (arg == "-h" || arg == "--help") {
-            print_usage(argc, argv, params);
-            exit(0);
-        } else {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
-            print_usage(argc, argv, params);
-            exit(0);
-        }
-    }
+  img.nx = nx;
+  img.ny = ny;
+  img.data.resize(nx * ny * 3);
+  memcpy(img.data.data(), data_ptr, nx * ny * 3);
 
-    return true;
+  stbi_image_free(data_ptr);
+  return true;
 }
 
-bool ImGui_BeginFrame(SDL_Window * window) {
-    ImGui_NewFrame(window);
+// Generate mask based on image and point
+std::vector<unsigned char> generate_mask(const sam_image_u8 &img, float x,
+                                         float y, const sam_params &params,
+                                         sam_state &state) {
+  sam_point pt{x, y};
 
-    return true;
+  if (!sam_compute_embd_img(img, params.n_threads, state)) {
+    printf("failed to compute encoded image\n");
+  }
+  printf("t_compute_img_ms = %d ms\n", state.t_compute_img_ms);
+
+  std::vector<sam_image_u8> masks =
+      sam_compute_masks(img, params.n_threads, pt, state);
+
+  if (masks.empty()) {
+    fprintf(stderr, "No mask generated\n");
+    return {};
+  }
+
+  const sam_image_u8 &mask = masks[0]; // Using the first mask
+  std::vector<unsigned char> output_img(mask.nx * mask.ny * 3);
+
+  // Convert mask to RGB image
+  for (int i = 0; i < mask.nx * mask.ny; ++i) {
+    output_img[3 * i + 0] = mask.data[i];
+    output_img[3 * i + 1] = mask.data[i];
+    output_img[3 * i + 2] = mask.data[i];
+  }
+
+  // Encode the RGB data to a PNG
+  std::vector<unsigned char> png_data;
+  stbi_write_png_to_func(
+      [](void *context, void *data, int size) {
+        std::vector<unsigned char> *png_data =
+            static_cast<std::vector<unsigned char> *>(context);
+        png_data->insert(png_data->end(), (unsigned char *)data,
+                         (unsigned char *)data + size);
+      },
+      &png_data, mask.nx, mask.ny, 3, output_img.data(), mask.nx * 3);
+
+  return png_data;
 }
 
-bool ImGui_EndFrame(SDL_Window * window) {
-    // Rendering
-    int display_w, display_h;
-    SDL_GetWindowSize(window, &display_w, &display_h);
-    glViewport(0, 0, display_w, display_h);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+// Downscale the image to fit within a default screen size (1024x1024)
+static bool downscale_img_to_screen(sam_image_u8 &img) {
+  const int max_width = 1024;  // Default screen width
+  const int max_height = 1024; // Default screen height
 
-    ImGui::Render();
-    ImGui_RenderDrawData(ImGui::GetDrawData());
+  fprintf(stderr, "%s: default screen size (%d x %d) \n", __func__, max_width,
+          max_height);
+  fprintf(stderr, "%s: img size (%d x %d) \n", __func__, img.nx, img.ny);
 
-    SDL_GL_SwapWindow(window);
+  // Check if the image exceeds the maximum allowed dimensions
+  if (img.nx > max_width || img.ny > max_height) {
 
-    return true;
+    printf("Scaling based on above values");
+
+    // Calculate the scaling factor to fit within the 1024x1024 size while
+    // preserving the aspect ratio
+    const float scale_x = static_cast<float>(img.nx) / max_width;
+    const float scale_y = static_cast<float>(img.ny) / max_height;
+    const float scale =
+        std::max(scale_x, scale_y); // Use the largest scaling factor
+
+    fprintf(stderr, "%s: Scaling image by factor %f\n", __func__, scale);
+
+    // Downscale the image using the calculated scaling factor
+    img = downscale_img(img, scale);
+  }
+
+  printf("returning true");
+
+  //   flush
+  fflush(stdout);
+
+  return true;
 }
 
-GLuint createGLTexture(const sam_image_u8 & img, GLint format) {
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
+int main(int argc, char **argv) {
+  // Register signal handler for graceful shutdown
+  signal(SIGINT, signal_handler);
 
-    // Setup filtering parameters for display
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); // This is required on WebGL for non power-of-two textures
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); // Same
+  sam_params params;
+  if (!params_parse(argc, argv, params)) {
+    return 1;
+  }
 
-    // Upload pixels into texture
-#if defined(GL_UNPACK_ROW_LENGTH) && !defined(__EMSCRIPTEN__)
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-#endif
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  if (params.seed < 0) {
+    params.seed = time(NULL);
+  }
+  fprintf(stderr, "Seed = %d\n", params.seed);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, format, img.nx, img.ny, 0, format, GL_UNSIGNED_BYTE, img.data.data());
+  // Load SAM model
+  std::shared_ptr<sam_state> state = sam_load_model(params);
+  if (!state) {
+    fprintf(stderr, "Failed to load model\n");
+    return 1;
+  }
 
-    return tex;
-}
+  printf("t_load_ms = %d ms\n", state->t_load_ms);
 
-void enable_blending(const ImDrawList*, const ImDrawCmd*) {
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-}
-
-void disable_blending(const ImDrawList*, const ImDrawCmd*) {
-    glDisable(GL_BLEND);
-}
-
-int main_loop(sam_image_u8 img, const sam_params & params, sam_state & state) {
-    ImGui_PreInit();
-
-    const char * title = "SAM.cpp";
-    SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI);
-
-    SDL_Window * window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, img.nx, img.ny, window_flags);
-
-    if (!window) {
-        fprintf(stderr, "Error: %s\n", SDL_GetError());
-        return -1;
+  // Create HTTP server
+  svr.Post("/generate_mask", [&](const httplib::Request &req,
+                                 httplib::Response &res) {
+    // Get current time in IST
+    time_t now = time(0);
+    tm *ltm = localtime(&now);
+    printf("Received request @ %02d-%02d-%04d %02d:%02d:%02d IST\n",
+           ltm->tm_mday, ltm->tm_mon + 1, ltm->tm_year + 1900, ltm->tm_hour,
+           ltm->tm_min, ltm->tm_sec);
+    // print request params
+    printf("Request params:\n");
+    for (const auto &param : req.params) {
+      printf("  %s: %s\n", param.first.c_str(), param.second.c_str());
     }
 
-    void * gl_context = SDL_GL_CreateContext(window);
-
-    SDL_GL_MakeCurrent(window, gl_context);
-    SDL_GL_SetSwapInterval(1); // Enable vsync
-
-    GLuint tex = createGLTexture(img, GL_RGB);
-
-    ImGui_Init(window, gl_context);
-    ImGui::GetIO().IniFilename = nullptr;
-
-    ImGui_BeginFrame(window);
-    ImGui::NewFrame();
-    ImGui::EndFrame();
-    ImGui_EndFrame(window);
-
-    bool done = false;
-    float x = 0.f;
-    float y = 0.f;
-    float xLast = 0.f;
-    float yLast = 0.f;
-    std::vector<sam_image_u8> masks;
-    std::vector<GLuint> maskTextures;
-    bool segmentOnMove = false;
-    bool outputMultipleMasks = false;
-
-    while (!done) {
-        bool computeMasks = false;
-
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            ImGui_ProcessEvent(&event);
-            if (event.type == SDL_QUIT) {
-                done = true;
-            }
-            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window)) {
-                done = true;
-            }
-            if (event.type == SDL_MOUSEBUTTONDOWN) {
-                if (event.button.button == SDL_BUTTON_LEFT) {
-                    computeMasks = true;
-                    x = event.button.x;
-                    y = event.button.y;
-                }
-            }
-            if (segmentOnMove && event.type == SDL_MOUSEMOTION) {
-                x = event.motion.x;
-                y = event.motion.y;
-            }
-            if (event.type == SDL_DROPFILE) {
-                sam_image_u8 new_img;
-                if (!load_image_from_file(std::string(event.drop.file), new_img)) {
-                    printf("failed to load image from '%s'\n", event.drop.file);
-                }
-                else {
-                    SDL_SetWindowTitle(window, "Encoding new img...");
-                    downscale_img_to_screen(new_img, window);
-                    if (!sam_compute_embd_img(new_img, params.n_threads, state)) {
-                        printf("failed to compute encoded image\n");
-                    }
-                    printf("t_compute_img_ms = %d ms\n", state.t_compute_img_ms);
-
-                    tex = createGLTexture(new_img, GL_RGB);
-
-                    SDL_SetWindowSize(window, new_img.nx, new_img.ny);
-                    SDL_SetWindowTitle(window, title);
-                    img = std::move(new_img);
-                    computeMasks = true;
-                }
-            }
-        }
-
-        if (segmentOnMove && (x != xLast || y != yLast)) {
-            computeMasks = true;
-        }
-
-        xLast = x;
-        yLast = y;
-
-        if (computeMasks) {
-            sam_point pt { x, y};
-            printf("pt = (%f, %f)\n", pt.x, pt.y);
-
-            masks = sam_compute_masks(img, params.n_threads, pt, state);
-
-            if (!maskTextures.empty()) {
-                glDeleteTextures(maskTextures.size(), maskTextures.data());
-                maskTextures.clear();
-            }
-
-            for (auto& mask : masks) {
-                sam_image_u8 mask_rgb = { mask.nx, mask.ny, };
-                mask_rgb.data.resize(3*mask.nx*mask.ny);
-                for (int i = 0; i < mask.nx*mask.ny; ++i) {
-                    mask_rgb.data[3*i+0] = mask.data[i];
-                    mask_rgb.data[3*i+1] = mask.data[i];
-                    mask_rgb.data[3*i+2] = mask.data[i];
-                }
-
-                maskTextures.push_back(createGLTexture(mask_rgb, GL_RGB));
-            }
-        }
-
-        ImGui_BeginFrame(window);
-        ImGui::NewFrame();
-        ImGui::SetNextWindowPos(ImVec2(0,0));
-        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::Begin(title, NULL, ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-
-        ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        draw_list->AddImage((void*)(intptr_t)tex, ImVec2(0,0), ImVec2(img.nx, img.ny));
-
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 255));
-        ImGui::Checkbox("Segment on hover", &segmentOnMove);
-        ImGui::Checkbox("Output multiple masks", &outputMultipleMasks);
-        ImGui::PopStyleColor();
-
-        draw_list->AddCircleFilled(ImVec2(x, y), 5, IM_COL32(255, 0, 0, 255));
-
-        draw_list->AddCallback(enable_blending, {});
-
-        if (outputMultipleMasks) {
-            for (int i = 0; i < int(maskTextures.size()); ++i) {
-                const int r = i == 0 ? 255 : 0;
-                const int g = i == 1 ? 255 : 0;
-                const int b = i == 2 ? 255 : 0;
-                draw_list->AddImage((void*)(intptr_t)maskTextures[i], ImVec2(0,0), ImVec2(img.nx, img.ny), ImVec2(0,0), ImVec2(1,1), IM_COL32(r, g, b, 172));
-            }
-        }
-        else if (!maskTextures.empty()) {
-            draw_list->AddImage((void*)(intptr_t)maskTextures[0], ImVec2(0,0), ImVec2(img.nx,img.ny), ImVec2(0,0), ImVec2(1,1), IM_COL32(0, 0, 255, 128));
-        }
-
-        draw_list->AddCallback(disable_blending, {});
-
-
-        ImGui::End();
-        ImGui::EndFrame();
-        ImGui_EndFrame(window);
+    // Print information about the file received
+    if (req.has_file("image")) {
+      auto image_file = req.get_file_value("image");
+      printf("Received file: %s, size: %zu bytes\n",
+             image_file.filename.c_str(), image_file.content.size());
+    } else {
+      printf("No image file received.\n");
+      res.status = 400;
+      res.set_content("No image file in request", "text/plain");
+      return;
     }
 
-    SDL_DestroyWindow(window);
-
-    return 0;
-}
-
-int main(int argc, char ** argv) {
-    sam_params params;
-    if (!params_parse(argc, argv, params)) {
-        return 1;
+    // Check if 'x' and 'y' params exist
+    if (!req.has_param("x") || !req.has_param("y")) {
+      printf("Missing 'x' or 'y' parameters.\n");
+      res.status = 400;
+      res.set_content("Missing 'x' or 'y' parameters", "text/plain");
+      return;
     }
 
-    if (params.seed < 0) {
-        params.seed = time(NULL);
+    // Get point
+    float x = std::stof(req.get_param_value("x"));
+    float y = std::stof(req.get_param_value("y"));
+    printf("x: %f, y: %f\n", x, y);
+
+    if (req.has_file("image") && req.has_param("x") && req.has_param("y")) {
+      // Get image file data
+      auto image_file = req.get_file_value("image");
+      std::vector<unsigned char> image_data(image_file.content.begin(),
+                                            image_file.content.end());
+
+      // Load image
+      sam_image_u8 img;
+      if (!load_image_from_memory(image_data, img)) {
+        res.status = 400;
+        res.set_content("Failed to load image", "text/plain");
+        return;
+      }
+
+      // Downscale image if necessary
+      downscale_img_to_screen(img);
+
+      printf("Downscale successful!");
+
+      // Generate mask
+      auto mask_data = generate_mask(img, x, y, params, *state);
+      if (mask_data.empty()) {
+        res.status = 500;
+        res.set_content("Failed to generate mask", "text/plain");
+        return;
+      }
+
+      // Set response
+      res.set_content(reinterpret_cast<const char *>(mask_data.data()),
+                      mask_data.size(), "image/png");
+    } else {
+      res.status = 400;
+      res.set_content("Invalid request", "text/plain");
     }
-    fprintf(stderr, "%s: seed = %d\n", __func__, params.seed);
+  });
 
-    // load the image
-    sam_image_u8 img0;
-    if (!load_image_from_file(params.fname_inp, img0)) {
-        fprintf(stderr, "%s: failed to load image from '%s'\n", __func__, params.fname_inp.c_str());
-        return 1;
-    }
-    fprintf(stderr, "%s: loaded image '%s' (%d x %d)\n", __func__, params.fname_inp.c_str(), img0.nx, img0.ny);
+  svr.Get("/stop", [&](const auto & /*req*/, auto & /*res*/) {
+    printf("Received stop request. Shutting down server...\n");
+    svr.stop();
+  });
 
-    // init SDL video subsystem to get the screen size
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "Error: %s\n", SDL_GetError());
-        return -1;
-    }
+  printf("Server listening on port 8080...\n");
 
-    // resize img when exceeds the screen
-    downscale_img_to_screen(img0, NULL);
+  try {
+    svr.listen("0.0.0.0", 8080);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Server encountered an error: %s\n", e.what());
+  }
 
-    std::shared_ptr<sam_state> state = sam_load_model(params);
-    if (!state) {
-        fprintf(stderr, "%s: failed to load model\n", __func__);
-        return 1;
-    }
-    printf("t_load_ms = %d ms\n", state->t_load_ms);
+  printf("Server stopped. Cleaning up resources...\n");
 
+  // Clean up
+  sam_deinit(*state);
 
-    if (!sam_compute_embd_img(img0, params.n_threads, *state)) {
-        fprintf(stderr, "%s: failed to compute encoded image\n", __func__);
-        return 1;
-    }
-    printf("t_compute_img_ms = %d ms\n", state->t_compute_img_ms);
+  printf("Cleanup done.\n");
 
-    int res = main_loop(std::move(img0), params, *state);
-
-    sam_deinit(*state);
-
-    return res;
+  return 0;
 }

@@ -19,12 +19,18 @@ endif()
 option(SAM_BUILD_EXAMPLES "sam: build examples" ${SAM_STANDALONE})
 
 add_subdirectory(ggml)
+set(HTTPLIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cpp-httplib)
+include_directories(${HTTPLIB_DIR})
+
 
 set(SAM_LIB sam.cpp)
 
 add_library(${SAM_LIB} sam.cpp sam.h)
 target_link_libraries(${SAM_LIB} PUBLIC ggml)
+
 target_include_directories(${SAM_LIB} PUBLIC .)
+target_include_directories(${SAM_LIB} PUBLIC . ${HTTPLIB_DIR})
+
 target_compile_features(${SAM_LIB} PUBLIC cxx_std_14)
 
 if (SAM_BUILD_EXAMPLES)
