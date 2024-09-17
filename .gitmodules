@@ -4,3 +4,6 @@
 [submodule "examples/third-party/imgui/imgui"]
 	path = examples/third-party/imgui/imgui
 	url = https://github.com/ocornut/imgui
+[submodule "cpp-httplib"]
+	path = cpp-httplib
+	url = ./cpp-httplib
