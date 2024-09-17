@@ -321,10 +321,10 @@ int main(int argc, char **argv) {
     svr.stop();
   });
 
-  printf("Server listening on port 8080...\n");
+  printf("Server listening on port 42069...\n");
 
   try {
-    svr.listen("0.0.0.0", 8080);
+    svr.listen("0.0.0.0", 42069);
   } catch (const std::exception &e) {
     fprintf(stderr, "Server encountered an error: %s\n", e.what());
   }
