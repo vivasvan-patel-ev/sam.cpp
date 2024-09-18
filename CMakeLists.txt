@@ -25,11 +25,12 @@ include_directories(${HTTPLIB_DIR})
 
 set(SAM_LIB sam.cpp)
 
-add_library(${SAM_LIB} sam.cpp sam.h)
+add_library(${SAM_LIB} sam.cpp sam.h examples/stb_image_write.h)
 target_link_libraries(${SAM_LIB} PUBLIC ggml)
 
 target_include_directories(${SAM_LIB} PUBLIC .)
 target_include_directories(${SAM_LIB} PUBLIC . ${HTTPLIB_DIR})
+target_include_directories(${SAM_LIB} PUBLIC ./examples)
 
 target_compile_features(${SAM_LIB} PUBLIC cxx_std_14)
 

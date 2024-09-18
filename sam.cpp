@@ -5,6 +5,9 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -361,6 +364,11 @@ static void ggml_sam_cos(struct ggml_tensor *dst, const struct ggml_tensor *src,
 // TODO: for some reason, this is not numerically identical to pytorch's
 // interpolation
 bool sam_image_preprocess(const sam_image_u8 &img, sam_image_f32 &res) {
+
+  // // Save the original image as a JPEG for debugging
+  // stbi_write_jpg("sam_image_preprocess__og.jpg", img.nx, img.ny, 3,
+  //                img.data.data(), 100);
+
   const int nx = img.nx;
   const int ny = img.ny;
 
@@ -420,6 +428,10 @@ bool sam_image_preprocess(const sam_image_u8 &img, sam_image_f32 &res) {
       }
     }
   }
+
+  // // Save the resized and padded image for debugging
+  // stbi_write_jpg("sam_image_preprocess__scaled_padded.jpg", nx2,
+  //                ny2, 3, res.data.data(), 100);
 
   return true;
 }
@@ -2335,13 +2347,23 @@ bool sam_compute_embd_img(const sam_image_u8 &img, int n_threads,
 
   st.ctx_img = ggml_init(ggml_params);
 
+  fprintf(stderr, "%s: ggml_init done\n", __func__);
+
   st.embd_img = ggml_new_tensor_3d(
       st.ctx_img, GGML_TYPE_F32, model.hparams.n_img_embd(),
       model.hparams.n_img_embd(), model.hparams.n_enc_out_chans);
 
   // Encode the image
   const size_t alignment = ggml_backend_get_alignment(model.backend);
+
+  fprintf(stderr, "%s: ggml_allocr_new_measure initing ... %d\n", __func__,
+          alignment);
+
   st.allocr = ggml_allocr_new_measure(alignment);
+
+  fprintf(stderr, "%s: ggml_allocr_new_measure init done\n", __func__);
+
+  fprintf(stderr, "%s: encoding image...", __func__);
 
   struct ggml_cgraph *gf_measure = sam_encode_image(model, st, img1);
   if (!gf_measure) {
