@@ -322,6 +322,9 @@ int main(int argc, char **argv) {
       res.status = 400;
       res.set_content("Invalid request", "text/plain");
     }
+
+    // flush
+    fflush(stdout);
   });
 
   svr.Get("/stop", [&](const auto & /*req*/, auto & /*res*/) {
