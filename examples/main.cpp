@@ -241,8 +241,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to load model\n");
     return 1;
   }
-
-  printf("t_load_ms = %d ms\n", state->t_load_ms);
+  fprintf(stderr, "%s: t_load_ms = %d ms\n", __func__, state->t_load_ms);
 
   // Create HTTP server
   svr.Post("/generate_mask", [&](const httplib::Request &req,
@@ -304,11 +303,11 @@ int main(int argc, char **argv) {
       printf("Downscale successful!\n");
 
       // Generate mask
-      printf("Generating mask...\n");
+      fprintf(stderr, "Generating mask...\n");
       int start_time = clock();
       auto mask_data = generate_mask(img, x, y, params, *state);
       int end_time = clock();
-      printf("Mask generation took %d ms\n",
+      fprintf(stderr, "%s: Mask generation took %d ms\n", __func__,
              (end_time - start_time) * 1000 / CLOCKS_PER_SEC);
       if (mask_data.empty()) {
         res.status = 500;
