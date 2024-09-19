@@ -11,17 +11,6 @@ cd sam.cpp
 sudo apt install libsdl2-dev
 mkdir build && cd build
 cmake .. && make -j4
-
-# FOR HTTP SERVER
-./bin/sam -t 16 -i ../img.jpg -m ../checkpoints/ggml-model-f16.bin
-
-# FOR SO FILE
-g++ -shared -o libmask.so ./examples/lib.cpp -fPIC -std=c++11 -lstdc++ -lpthread \
--I./sam.cpp \
--I./sam.cpp/cpp-httplib \
--L./build/bin \
--lsam.cpp -lggml \
--Wl,-rpath,./build/bin
 ```
 
 Note: you need to download the model checkpoint below (`sam_vit_b_01ec64.pth`) first from [here](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth) and place it in the `checkpoints` folder
@@ -60,6 +49,26 @@ You can download a [model checkpoint](https://github.com/facebookresearch/segmen
 ```
 # Convert PTH model to ggml
 python convert-pth-to-ggml.py sam_vit_b_01ec64.pth . 1
+```
+
+## Usage
+```
+# FOR HTTP SERVER
+./bin/sam -t 16 -i ../img.jpg -m ../checkpoints/ggml-model-f16.bin
+
+cd ..
+# FOR SO FILE ()
+export CURRENT_DIR=$(pwd)
+
+g++ -shared -o ./release/arm/libmask.so ./examples/lib.cpp -fPIC -std=c++11 -lstdc++ -lpthread \
+-I$CURRENT_DIR \
+-I$CURRENT_DIR/cpp-httplib \
+-L$CURRENT_DIR/build/bin \
+-lsam.cpp -lggml \
+-Wl,-rpath,$CURRENT_DIR/build/bin
+
+# COPY THE SO FILE AND PREPARE THE RELEASE FOLDER
+cp -r build/bin/ ./release/{ARCH}
 ```
 
 ## Example output on M2 Ultra

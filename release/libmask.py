@@ -2,9 +2,20 @@ import ctypes
 import numpy as np
 import cv2  # Assuming you want to use OpenCV for image loading and manipulation
 import os
+import platform
 
-# Load the shared library
-lib = ctypes.CDLL("./release/x64/libmask.so")
+# Determine the architecture
+architecture = platform.machine()
+
+# Set the correct path based on architecture
+if architecture == "x86_64":
+    lib_path = "x64"
+elif architecture == "arm64" or architecture == "aarch64":
+    lib_path = "arm"
+else:
+    raise ValueError(f"Unsupported architecture: {architecture}")
+
+lib = ctypes.CDLL(f"./release/{lib_path}/libmask.so")
 
 
 # Define the params structure

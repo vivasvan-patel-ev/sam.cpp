@@ -36,3 +36,4 @@ __pycache__/
 
 checkpoints/
 venv/
+output_mask.png

@@ -146,8 +146,8 @@ std::vector<unsigned char> generate_mask(const sam_image_u8 &img, float x,
   sam_point pt{x, y};
 
   // // save the original image to disk
-  // stbi_write_jpg("original_image.jpg", img.nx, img.ny, 3, img.data.data(), 100);
-
+  // stbi_write_jpg("original_image.jpg", img.nx, img.ny, 3, img.data.data(),
+  // 100);
 
   if (!sam_compute_embd_img(img, params.n_threads, state)) {
     printf("failed to compute encoded image\n");
@@ -308,7 +308,7 @@ int main(int argc, char **argv) {
       auto mask_data = generate_mask(img, x, y, params, *state);
       int end_time = clock();
       fprintf(stderr, "%s: Mask generation took %d ms\n", __func__,
-             (end_time - start_time) * 1000 / CLOCKS_PER_SEC);
+              (end_time - start_time) * 1000 / CLOCKS_PER_SEC);
       if (mask_data.empty()) {
         res.status = 500;
         res.set_content("Failed to generate mask", "text/plain");
