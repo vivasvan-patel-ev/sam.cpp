@@ -14,6 +14,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <cinttypes>
 
 #if defined(_MSC_VER)
 #pragma warning(disable : 4244 4267) // possible loss of data
@@ -2319,15 +2320,15 @@ bool sam_compute_embd_img(const sam_image_u8 &img, int n_threads,
 
   const int64_t t_start_ms = ggml_time_ms();
 
-  // preprocess to f32
+  // Preprocess to f32
   sam_image_f32 img1;
+  int64_t t_preprocess_start = ggml_time_ms();
   if (!sam_image_preprocess(img, img1)) {
     fprintf(stderr, "%s: failed to preprocess image\n", __func__);
     return false;
   }
-
-  fprintf(stderr, "%s: preprocessed image (%d x %d)\n", __func__, img1.nx,
-          img1.ny);
+  int64_t t_preprocess_end = ggml_time_ms();
+  fprintf(stderr, "%s: preprocessed image (%d x %d) in %" PRId64 " ms\n", __func__, img1.nx, img1.ny, t_preprocess_end - t_preprocess_start);
 
   static const size_t buf_size = 256u * 1024 * 1024;
 
@@ -2345,59 +2346,66 @@ bool sam_compute_embd_img(const sam_image_u8 &img, int n_threads,
       /*.no_alloc   =*/false,
   };
 
+  int64_t t_ggml_init_start = ggml_time_ms();
   st.ctx_img = ggml_init(ggml_params);
-
-  fprintf(stderr, "%s: ggml_init done\n", __func__);
+  int64_t t_ggml_init_end = ggml_time_ms();
+  fprintf(stderr, "%s: ggml_init done in %" PRId64 " ms\n", __func__, t_ggml_init_end - t_ggml_init_start);
 
   st.embd_img = ggml_new_tensor_3d(
       st.ctx_img, GGML_TYPE_F32, model.hparams.n_img_embd(),
       model.hparams.n_img_embd(), model.hparams.n_enc_out_chans);
 
-  // Encode the image
   const size_t alignment = ggml_backend_get_alignment(model.backend);
 
-  fprintf(stderr, "%s: ggml_allocr_new_measure initing ... %d\n", __func__,
-          alignment);
-
+  fprintf(stderr, "%s: ggml_allocr_new_measure initing ... %d\n", __func__, alignment);
+  int64_t t_allocr_measure_start = ggml_time_ms();
   st.allocr = ggml_allocr_new_measure(alignment);
-
-  fprintf(stderr, "%s: ggml_allocr_new_measure init done\n", __func__);
+  int64_t t_allocr_measure_end = ggml_time_ms();
+  fprintf(stderr, "%s: ggml_allocr_new_measure init done in %" PRId64 " ms\n", __func__, t_allocr_measure_end - t_allocr_measure_start);
 
   fprintf(stderr, "%s: encoding image...", __func__);
-
+  int64_t t_encode_start = ggml_time_ms();
   struct ggml_cgraph *gf_measure = sam_encode_image(model, st, img1);
+  int64_t t_encode_end = ggml_time_ms();
   if (!gf_measure) {
     fprintf(stderr, "%s: failed to encode image\n", __func__);
     return false;
   }
+  fprintf(stderr, "%s: encoded image in %" PRId64 " ms\n", __func__, t_encode_end - t_encode_start);
 
   size_t alloc_size = ggml_allocr_alloc_graph(st.allocr, gf_measure);
   ggml_allocr_free(st.allocr);
 
-  // recreate allocator with exact memory requirements
+  // Recreate allocator with exact memory requirements
+  int64_t t_alloc_start = ggml_time_ms();
   ggml_backend_buffer_t buf_compute =
       ggml_backend_alloc_buffer(model.backend, alloc_size);
   st.allocr = ggml_allocr_new_from_buffer(buf_compute);
+  int64_t t_alloc_end = ggml_time_ms();
+  fprintf(stderr, "%s: allocated buffer in %" PRId64 " ms\n", __func__, t_alloc_end - t_alloc_start);
 
-  // compute the graph with the measured exact memory requirements from above
+  // Compute the graph with the measured exact memory requirements from above
   ggml_allocr_reset(st.allocr);
-
+  int64_t t_encode_again_start = ggml_time_ms();
   struct ggml_cgraph *gf = sam_encode_image(model, st, img1);
+  int64_t t_encode_again_end = ggml_time_ms();
   if (!gf) {
     fprintf(stderr, "%s: failed to encode image\n", __func__);
     return false;
   }
 
   ggml_allocr_alloc_graph(st.allocr, gf);
-
+  int64_t t_graph_compute_start = ggml_time_ms();
   ggml_graph_compute_helper(model.backend, gf, n_threads);
+  int64_t t_graph_compute_end = ggml_time_ms();
+  fprintf(stderr, "%s: computed graph in %" PRId64 " ms\n", __func__, t_graph_compute_end - t_graph_compute_start);
 
   ggml_allocr_free(st.allocr);
   ggml_backend_buffer_free(buf_compute);
-
   st.allocr = {};
 
   state.t_compute_img_ms = ggml_time_ms() - t_start_ms;
+  fprintf(stderr, "%s: total compute time: %" PRId64 " ms\n", __func__, state.t_compute_img_ms);
 
   return true;
 }
