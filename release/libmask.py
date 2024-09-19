@@ -3,7 +3,7 @@ import numpy as np
 import cv2  # Assuming you want to use OpenCV for image loading and manipulation
 
 # Load the shared library
-lib = ctypes.CDLL("./libmask.so")
+lib = ctypes.CDLL("./release/x64/libmask.so")
 
 
 # Define the params structure
