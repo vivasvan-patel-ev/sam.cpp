@@ -9,6 +9,8 @@
 struct sam_point {
     float x = 0;
     float y = 0;
+
+    sam_point(float x, float y): x(x), y(y) {}
 };
 
 // RGB uint8 image
