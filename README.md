@@ -6,8 +6,22 @@ https://github.com/YavorGIvanov/sam.cpp/assets/1991296/a69be66f-8e27-43a0-8a4d-6
 
 ## Quick start
 ```bash
-git clone --recursive https://github.com/YavorGIvanov/sam.cpp
+git clone --recursive https://github.com/vivasvan-patel-ev/sam.cpp
 cd sam.cpp
+sudo apt install libsdl2-dev
+mkdir build && cd build
+cmake .. && make -j4
+
+# FOR HTTP SERVER
+./bin/sam -t 16 -i ../img.jpg -m ../checkpoints/ggml-model-f16.bin
+
+# FOR SO FILE
+g++ -shared -o libmask.so ./examples/lib.cpp -fPIC -std=c++11 -lstdc++ -lpthread \
+-I./sam.cpp \
+-I./sam.cpp/cpp-httplib \
+-L./build/bin \
+-lsam.cpp -lggml \
+-Wl,-rpath,./build/bin
 ```
 
 Note: you need to download the model checkpoint below (`sam_vit_b_01ec64.pth`) first from [here](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth) and place it in the `checkpoints` folder
