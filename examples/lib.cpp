@@ -32,12 +32,21 @@ extern "C" {
     // Return the mask data directly as a 1-channel image
     return mask.data;
   }
-
-  // A wrapper function for C-style interface
-  void generate_mask_wrapper(const unsigned char *image_data, int width,
+void generate_mask_wrapper(const unsigned char *image_data, int width,
                             int height, float x, float y,
-                            const sam_params &params,
+                            int32_t seed, int32_t n_threads,
+                            const char *model, const char *fname_inp,
+                            const char *fname_out,
                             unsigned char **output_data, int *output_size) {
+
+    // Create sam_params struct inside the function
+    sam_params params;
+    params.seed = seed;
+    params.n_threads = n_threads;
+    params.model = model;
+    params.fname_inp = fname_inp;
+    params.fname_out = fname_out;
+    
     sam_image_u8 img;
     img.nx = width;
     img.ny = height;

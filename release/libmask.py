@@ -1,6 +1,7 @@
 import ctypes
 import numpy as np
 import cv2  # Assuming you want to use OpenCV for image loading and manipulation
+import os
 
 # Load the shared library
 lib = ctypes.CDLL("./release/x64/libmask.so")
@@ -16,19 +17,19 @@ class SamParams(ctypes.Structure):
         ("fname_out", ctypes.c_char * 256),
     ]
 
-
-# Define the function signature for generate_mask_wrapper
-lib.generate_mask_wrapper.argtypes = [
-    ctypes.POINTER(ctypes.c_ubyte),  # Image data
-    ctypes.c_int,  # Width
-    ctypes.c_int,  # Height
-    ctypes.c_float,  # X coordinate
-    ctypes.c_float,  # Y coordinate
-    SamParams,  # Params
-    ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),  # Output data
-    ctypes.POINTER(ctypes.c_int),  # Output size
-]
-lib.generate_mask_wrapper.restype = None
+    def __init__(
+        self,
+        seed=-1,
+        n_threads=4,
+        model="./checkpoints/ggml-model-f16.bin",
+        fname_inp="./img.jpg",
+        fname_out="img.png",
+    ):
+        self.seed = seed
+        self.n_threads = n_threads
+        self.model = model.encode("utf-8")
+        self.fname_inp = fname_inp.encode("utf-8")
+        self.fname_out = fname_out.encode("utf-8")
 
 
 # Function to load an image using OpenCV
@@ -52,31 +53,48 @@ def main():
 
     # Create an instance of SamParams and set values
     params = SamParams()
-    params.seed = 42
-    params.n_threads = 4
-    params.model = (
-        b"./checkpoints/ggml-model-f16.bin"  # Replace with the actual model path
-    )
-    params.fname_inp = b"img.jpg"
-    params.fname_out = b"output_mask.png"
 
     # Prepare output variables
     output_data = ctypes.POINTER(ctypes.c_ubyte)()
     output_size = ctypes.c_int()
 
+    # Hard code data as correct types
+    # image_data = (ctypes.c_ubyte * len(image_data))(*image_data)
+    c_width = ctypes.c_int(width)
+    c_height = ctypes.c_int(height)
+    x = ctypes.c_float(100.0)  # Replace with actual value if needed
+    y = ctypes.c_float(150.0)  # Replace with actual value if needed
+    seed = ctypes.c_int(params.seed)
+    n_threads = ctypes.c_int(params.n_threads)
+    model = ctypes.c_char_p(params.model)
+    fname_inp = ctypes.c_char_p(params.fname_inp)
+    fname_out = ctypes.c_char_p(params.fname_out)
+    output_data = ctypes.POINTER(ctypes.c_ubyte)()
+    output_size = ctypes.c_int()
     # Call the function to generate the mask
     lib.generate_mask_wrapper(
         (ctypes.c_ubyte * len(image_data))(*image_data),
-        width,
-        height,
-        100.0,  # x coordinate (replace with actual value)
-        150.0,  # y coordinate (replace with actual value)
-        params,
+        c_width,
+        c_height,
+        x,  # x coordinate (replace with actual value)
+        y,  # y coordinate (replace with actual value)
+        seed,
+        n_threads,
+        model,  # Pass model as bytes
+        fname_inp,  # Pass fname_inp as bytes
+        fname_out,  # Pass fname_out as bytes
         ctypes.byref(output_data),
         ctypes.byref(output_size),
     )
+
+    lib.generate_mask_wrapper.restype = None
+
     # print size of output_data
     print(output_size.value)
+
+    if output_size.value == 0:
+        print("Error in generating mask")
+        return
 
     # Convert the pointer to bytes
     bytes_data = ctypes.string_at(output_data, output_size.value)

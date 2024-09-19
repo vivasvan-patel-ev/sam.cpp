@@ -25,9 +25,9 @@ struct sam_params {
     int32_t seed      = -1; // RNG seed
     int32_t n_threads = std::min(4, (int32_t) std::thread::hardware_concurrency());
 
-    std::string model     = "../checkpoints/ggml-model-f16-b.bin"; // model path
-    std::string fname_inp = "../img.jpg";
-    std::string fname_out = "img.out";
+    std::string model; // model path
+    std::string fname_inp;
+    std::string fname_out;
 };
 
 struct sam_ggml_state;
