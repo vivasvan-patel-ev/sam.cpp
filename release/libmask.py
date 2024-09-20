@@ -10,10 +10,12 @@ architecture = platform.machine()
 # Set the correct path based on architecture
 if architecture == "x86_64":
     lib_path = "x64"
-elif architecture == "arm64" or architecture == "aarch64":
+elif architecture == "arm64":
     lib_path = "arm"
+elif architecture == "aarch64":
+    lib_path = "aarch"
 else:
-    raise ValueError(f"Unsupported architecture: {architecture}")
+    raise Exception(f"Unsupported architecture: {architecture}")
 
 lib = ctypes.CDLL(f"./release/{lib_path}/libmask.so")
 
